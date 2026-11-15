@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The same seven entries as the Land Rover InControl Apps launcher (2.10.0 and 2.17.6).
+     A Bosch InControl Touch head unit announces manufacturer "Land Rover" (or "Jaguar"). -->
+<resources>
+    <usb-accessory manufacturer="BSOT" />
+    <usb-accessory model="JLR" />
+    <usb-accessory manufacturer="Denso" model="JLR-PCV-Gen2.1" />
+    <usb-accessory manufacturer="Denso" model="JLR-PCV-Gen2.1-Jaguar" />
+    <usb-accessory manufacturer="Denso" model="JLR-PCV-Gen2.1-Landrover" />
+    <usb-accessory manufacturer="Jaguar" />
+    <usb-accessory manufacturer="Land Rover" />
+</resources>

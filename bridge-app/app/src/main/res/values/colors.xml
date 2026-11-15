@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The logo artwork's own two colours, written by branding/MakeLogo.java. -->
+    <color name="brand_ground">#013924</color>
+    <color name="brand_ink">#FCF8E8</color>
+    <color name="brand_accent">#ADDE8F</color>
+    <color name="ic_launcher_background">#013924</color>
+</resources>

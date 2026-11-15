@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-feature android:name="android.hardware.usb.accessory" android:required="true" />
+
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <!-- Showing the phone's screen on the car: Android's own screen sharing, asked for each time. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Keeps the phone's screen from switching off while it is being shown on the car. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Android 14+ lets a connectedDevice foreground service start if the app holds USB permission
+         for an attached accessory or declares one of a few connectivity permissions. The first is
+         true whenever the car starts us; this install-time permission covers any gap. -->
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <!-- Only to read this phone's Bluetooth name, which the car asks for. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <!-- Android Auto: sockets to the Android Auto app on this phone, and the assistant's microphone. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+
+    <queries>
+        <package android:name="com.google.android.projection.gearhead" />
+    </queries>
+
+    <application
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="Disco Auto"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@android:style/Theme.DeviceDefault.DayNight">
+
+        <activity
+            android:name=".ui.MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Started by Android when the head unit puts the phone into accessory mode. -->
+        <activity
+            android:name=".usb.AccessoryActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:launchMode="singleInstance"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_ACCESSORY_ATTACHED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.hardware.usb.action.USB_ACCESSORY_ATTACHED"
+                android:resource="@xml/accessory_filter" />
+        </activity>
+
+        <activity
+            android:name=".ui.DiagnosticsActivity"
+            android:exported="false"
+            android:label="Help and log"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />
+
+        <!-- Turning or folding the phone must not restart the simulated car it is running. -->
+        <activity
+            android:name=".selftest.SelfTestActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|keyboard|keyboardHidden|navigation|uiMode"
+            android:exported="false"
+            android:label="Disco Auto self-test" />
+
+        <!-- The link to the car. -->
+        <service
+            android:name=".BridgeService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice|microphone" />
+
+        <!-- Passes touches on the car's screen to the phone while it is mirrored. Off until the
+             owner switches it on under Android's Accessibility settings. Gestures only. -->
+        <service
+            android:name=".touch.TouchService"
+            android:exported="true"
+            android:label="@string/touch_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/touch_service" />
+        </service>
+
+        <!-- Holds Android's screen sharing for as long as the phone's screen is on the car. -->
+        <service
+            android:name=".picture.CastService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+    </application>
+</manifest>

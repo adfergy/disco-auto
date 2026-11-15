@@ -1,0 +1,38 @@
+# Research material kept on the development machine only: the original Land Rover launcher and
+# its decompiled source are not ours to publish, and the reference repositories and tools are
+# large and can be fetched again.
+/apk/
+/analysis/
+/repos/
+/tools/
+
+# Logs brought back from the car: they contain the car's GPS position and Bluetooth addresses.
+/car-logs/
+
+# Old builds and working snapshots; git history replaces them from 0.2.0 on.
+/SpinBridge-*.apk
+/bridge-app/snapshots/
+
+# Build output and machine-specific files.
+/bridge-app/.gradle/
+/bridge-app/.kotlin/
+/bridge-app/build/
+/bridge-app/app/build/
+/bridge-app/local.properties
+.idea/
+*.iml
+.DS_Store
+.claude/
+
+# Built apps are published as GitHub Releases, not committed.
+/*.apk
+
+# Project notes, research write-ups and branding source art: kept locally, not published.
+/docs/
+/bridge-app/branding/
+/.github/
+
+# Release signing: the keystore and its passwords never go in the repository.
+/bridge-app/keystore.properties
+*.jks
+*.keystore

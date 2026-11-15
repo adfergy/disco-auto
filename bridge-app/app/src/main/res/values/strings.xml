@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- What Android's Accessibility settings show for the touch service. -->
+    <string name="touch_service_label">Disco Auto touch</string>
+    <string name="touch_service_summary">Work the phone from the car\'s screen while it is mirrored</string>
+    <string name="touch_service_description">While Disco Auto is showing this phone\'s screen on the car, this passes your touches on the car\'s screen to the phone, as if you had touched the phone in the same place. It is used for nothing else, and it reads nothing from the screen.</string>
+</resources>
