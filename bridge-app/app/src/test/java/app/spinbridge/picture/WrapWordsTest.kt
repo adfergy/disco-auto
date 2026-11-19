@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 package app.spinbridge.picture
 
+import app.spinbridge.aa.AndroidAuto
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -36,9 +37,10 @@ class WrapWordsTest {
     }
 
     @Test
-    fun aHintWrapsOntoAScreenTooNarrowForIt() {
-        val lines = wrapWords(ScreenCastSource.HINT, 200f, measure)
+    fun theCarsMessageWrapsOntoAScreenTooNarrowForIt() {
+        val lines = wrapWords(AndroidAuto.CAR_FOLLOW_PHONE, 300f, measure)
         assertTrue(lines.size > 1)
-        assertEquals(ScreenCastSource.HINT, lines.joinToString(" "))
+        assertTrue(lines.all { measure(it) <= 300f })
+        assertEquals(AndroidAuto.CAR_FOLLOW_PHONE, lines.joinToString(" "))
     }
 }

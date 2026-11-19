@@ -4,7 +4,7 @@
 
 | Where | What |
 | --- | --- |
-| `app/src/main/java/app/spinbridge/**` | The link to the car (mySPIN), the phone's screens, mirroring, passing the car's touches to the phone, the car's menu, the self-test, and the glue between the Android Auto receiver and the car |
+| `app/src/main/java/app/spinbridge/**` | The link to the car (mySPIN), the phone's screens, the car's logo card, the self-test, and the glue between the Android Auto receiver and the car |
 | `app/src/main/java/io/motohub/android/androidauto/SpinBridgeShims.kt`, `.../tbox/TBoxSessionRegistry.kt` | Minimal stand-ins for MOTO-HUB types the receiver refers to |
 
 The car side was written from the behaviour of the Land Rover InControl Apps launcher, for

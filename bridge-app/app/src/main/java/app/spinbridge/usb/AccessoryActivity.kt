@@ -62,9 +62,8 @@ class AccessoryActivity : Activity() {
         }
         BridgeLog.log("started by the system for a USB accessory")
         BridgeService.attach(applicationContext, accessory)
-        // Showing the phone's screen needs the owner's yes to Android's prompt, and only one of the
-        // app's own screens can put it. So unless Android Auto is ready to take
-        // the car's screen by itself, bring that screen forward now, while Android still lets us.
+        // Unless Android Auto is ready to take the car's screen by itself, the owner has something
+        // to do, and the app's own screen says what: bring it forward now, while Android lets us.
         if (AndroidAuto.availability() != AlternativePicture.Availability.AVAILABLE) {
             startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         }

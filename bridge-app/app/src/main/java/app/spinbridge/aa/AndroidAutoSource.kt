@@ -7,8 +7,7 @@ import app.spinbridge.BridgeLog
 import app.spinbridge.FrameSink
 import app.spinbridge.FrameSource
 import app.spinbridge.myspin.MySpinServer
-import app.spinbridge.picture.CarMenu
-import app.spinbridge.picture.PictureHost
+import app.spinbridge.picture.CarCard
 import app.spinbridge.picture.PictureStatus
 import io.motohub.android.aa.AaInput
 import io.motohub.android.aa.AaReceiver
@@ -35,13 +34,12 @@ import java.util.concurrent.atomic.AtomicInteger
  * Android Auto 17.4 and later only connect when the owner has started its "head unit server"
  * (Android Auto's settings, three-dot menu). No app can start that for them. This source is only
  * used while that server is up ([AndroidAuto.availability]); until Android Auto's picture
- * arrives the car has the menu ([CarMenu]) with ANDROID AUTO marked as on its way and MIRROR
- * there to be chosen instead, and [onStatus] carries what the phone should say.
+ * arrives the car has the logo card ([CarCard]) saying what is happening, and [onStatus] carries
+ * what the phone should say.
  */
 class AndroidAutoSource(
     context: Context,
     private val onStatus: (PictureStatus) -> Unit,
-    private val host: PictureHost? = null,
 ) : FrameSource {
     override val name = "Android Auto"
 
@@ -49,12 +47,9 @@ class AndroidAutoSource(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val touchEvents = AtomicInteger()
 
-    /** True while the menu, not Android Auto's own picture, is on the car. */
+    /** True while the logo card, not Android Auto's own picture, is on the car. */
     @Volatile private var cardUp = false
     @Volatile private var cardSetAt = 0L
-
-    /** The menu as last sent to the car, for telling what a touch on it means. */
-    @Volatile private var menuShown: CarMenu.Content? = null
 
     /** When a picture last arrived that the guard for a session's tail turned away. */
     @Volatile private var turnedAwayAt = 0L
@@ -161,16 +156,8 @@ class AndroidAutoSource(
 
     override fun onTouch(touches: List<MySpinServer.Touch>) {
         val car = client ?: return
-        if (cardUp) {
-            // The menu is up: a touch is a choice, not something for Android Auto.
-            val up = touches.lastOrNull { it.action == MySpinServer.TOUCH_UP } ?: return
-            val content = menuShown ?: return
-            if (CarMenu.choiceAt(car.width, car.height, content, up.x, up.y) == CarMenu.Choice.MIRROR) {
-                BridgeLog.log("[AA] MIRROR touched on the car's screen")
-                host?.chosen(CarMenu.Choice.MIRROR)
-            }
-            return
-        }
+        // The logo card is up: there is nothing on it to touch.
+        if (cardUp) return
         val active = receiver ?: return
         val surface = profile?.touchSurface ?: return
         touchEvents.addAndGet(touches.size)
@@ -246,7 +233,7 @@ class AndroidAutoSource(
      * against this loop.
      */
     private suspend fun backgroundLoop(bridge: DecodedFrameBridge, sink: FrameSink) {
-        val menu = CarMenu(appContext)
+        val card = CarCard(appContext)
         var lastTaken = sink.framesTaken()
         var lastTouches = 0
         var ticks = 0
@@ -271,15 +258,7 @@ class AndroidAutoSource(
                         report(status)
                         val car = client
                         if (car != null) {
-                            val content = CarMenu.Content(
-                                listOf(
-                                    CarMenu.Option(CarMenu.Choice.MIRROR, "MIRROR", enabled = true),
-                                    CarMenu.Option(CarMenu.Choice.ALTERNATIVE, AndroidAuto.menuLabel, enabled = true, current = true),
-                                ),
-                                AndroidAuto.carHint(status),
-                            )
-                            val (data, compression) = menu.frame(car, content)
-                            menuShown = content
+                            val (data, compression) = card.frame(car, AndroidAuto.carMessage(status))
                             // Android Auto's picture may have arrived meanwhile; it wins.
                             if (cardUp) sink.offer(data, compression)
                         }
@@ -359,7 +338,7 @@ class AndroidAutoSource(
             // server in working order answers at once.
             return if (now - listeningSince < NOT_ANSWERING_AFTER_MS) AndroidAuto.CONNECTING else AndroidAuto.NOT_ANSWERING
         }
-        // The server has gone. If it stays gone, the phone's screen takes over (CarPicture).
+        // The server has gone. If it stays gone, the waiting logo takes over (CarPicture).
         listeningSince = 0L
         return AndroidAuto.SERVER_GONE
     }

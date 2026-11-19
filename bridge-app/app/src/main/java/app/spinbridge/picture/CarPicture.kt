@@ -7,16 +7,11 @@ import app.spinbridge.FrameSink
 import app.spinbridge.FrameSource
 import app.spinbridge.aa.AndroidAuto
 import app.spinbridge.myspin.MySpinServer
-import java.util.concurrent.LinkedBlockingQueue
-import java.util.concurrent.TimeUnit
 
 /**
- * What the car is shown. By default that is the phone's own screen ([ScreenCastSource]); when an
- * [AlternativePicture] (Android Auto) is available, it takes over whenever it becomes available and
- * hands back when it has been unavailable for a while. Nothing has to be set anywhere: the choice
- * follows what is possible, looked at once a second. The owner can overrule it from the menu the
- * car shows when it has no picture ([CarMenu]): MIRROR while the other picture is on its way, and
- * the other picture again afterwards.
+ * What the car is shown: Android Auto whenever it is available, and otherwise the Disco Auto logo
+ * with a line pointing at the phone ([AlternativePicture.waitingSource]). Nothing has to be set
+ * anywhere: the choice follows what is possible, looked at once a second.
  *
  * The session calls [start] and the input callbacks with its own lock held. The picture sources
  * hand frames back to the session from their own threads, never from inside their start() or
@@ -26,15 +21,14 @@ import java.util.concurrent.TimeUnit
 class CarPicture(
     private val context: Context,
     private val onStatus: (PictureStatus) -> Unit,
-    private val alternative: AlternativePicture? = AndroidAuto,
-    private val phoneScreen: (Context, (PictureStatus) -> Unit, PictureHost) -> FrameSource = ::ScreenCastSource,
+    private val androidAuto: AlternativePicture = AndroidAuto,
     private val lookEveryMs: Long = 1_000L,
     private val clock: () -> Long = System::currentTimeMillis,
 ) : FrameSource {
     override val name: String get() = current?.source?.name ?: "nothing yet"
 
-    private class Showing(val source: FrameSource, val alternative: Boolean, val gate: Gate) {
-        /** Whether a real picture, not the menu, was on the car at this source's last report. */
+    private class Showing(val source: FrameSource, val androidAuto: Boolean, val gate: Gate) {
+        /** Whether Android Auto's own picture, not a card, was on the car at this source's last report. */
         @Volatile var onScreen = false
     }
 
@@ -47,66 +41,42 @@ class CarPicture(
 
     private val lock = Any()
     private val chooser = Chooser()
-    private val choices = LinkedBlockingQueue<CarMenu.Choice>()
     @Volatile private var client: MySpinServer.Client? = null
     private var sink: FrameSink? = null
     private var watcher: Thread? = null
     private var stopped = false
     @Volatile private var current: Showing? = null
-    @Volatile private var lastSeen = AlternativePicture.Availability.UNKNOWN
 
-    /** Set once the other picture has failed to start: it is left alone for the rest of this connection. */
-    @Volatile private var alternativeBroken = false
-
-    private val host = object : PictureHost {
-        override fun chosen(choice: CarMenu.Choice) {
-            // Acted on by the watcher's thread: a source may be calling from the session's.
-            if (alternative != null) choices.offer(choice)
-        }
-
-        override fun alternativeOption(): CarMenu.Option? = alternative?.let {
-            CarMenu.Option(
-                CarMenu.Choice.ALTERNATIVE, it.menuLabel,
-                enabled = !alternativeBroken && lastSeen == AlternativePicture.Availability.AVAILABLE,
-            )
-        }
-
-        override fun alternativeHint(): String? = alternative?.menuHint
-    }
+    /** Set once Android Auto has failed to start: it is left alone for the rest of this connection. */
+    @Volatile private var androidAutoBroken = false
 
     override fun start(client: MySpinServer.Client, sink: FrameSink) {
         synchronized(lock) {
             if (stopped || this.sink != null) return
             this.client = client
             this.sink = sink
-            show(alternative != null && chooser.alternative(false, look(), clock()))
-            if (alternative != null) {
-                watcher = Thread({ watch() }, "picture-choice").apply { isDaemon = true; start() }
-            }
+            show(chooser.androidAuto(false, look(), clock()))
+            watcher = Thread({ watch() }, "picture-choice").apply { isDaemon = true; start() }
         }
     }
 
-    private fun look(): AlternativePicture.Availability {
-        val seen = when {
-            alternative == null || alternativeBroken -> AlternativePicture.Availability.UNAVAILABLE
-            else -> try { alternative.availability() } catch (_: Exception) { AlternativePicture.Availability.UNKNOWN }
+    private fun look(): AlternativePicture.Availability =
+        if (androidAutoBroken) {
+            AlternativePicture.Availability.UNAVAILABLE
+        } else {
+            try { androidAuto.availability() } catch (_: Exception) { AlternativePicture.Availability.UNKNOWN }
         }
-        lastSeen = seen
-        return seen
-    }
 
     private fun watch() {
         try {
             while (true) {
-                // A choice made on the car's menu is acted on at once; otherwise look once a second.
-                val choice = choices.poll(lookEveryMs, TimeUnit.MILLISECONDS)
+                Thread.sleep(lookEveryMs)
                 val available = look()
                 synchronized(lock) {
                     if (stopped) return
-                    if (choice != null) chooser.picked(choice)
                     val showing = current
-                    val now = showing?.alternative == true
-                    val next = chooser.alternative(now, available, clock(), onScreen = now && showing?.onScreen == true)
+                    val now = showing?.androidAuto == true
+                    val next = chooser.androidAuto(now, available, clock(), onScreen = now && showing?.onScreen == true)
                     if (next != now) show(next)
                 }
             }
@@ -116,7 +86,7 @@ class CarPicture(
     }
 
     /** Lock held. Replaces whatever is showing. */
-    private fun show(alternativeWanted: Boolean) {
+    private fun show(androidAutoWanted: Boolean) {
         val car = client ?: return
         val out = sink ?: return
         current?.let { old ->
@@ -124,17 +94,16 @@ class CarPicture(
             runCatching { old.source.stop() }
         }
         current = null
-        if (alternativeWanted && alternative != null && begin(car, out, viaAlternative = true)) return
-        if (alternativeWanted) {
-            // It would not start. Leave it be until the next connection and show the phone's screen.
-            alternativeBroken = true
-            lastSeen = AlternativePicture.Availability.UNAVAILABLE
+        if (androidAutoWanted && begin(car, out, androidAuto = true)) return
+        if (androidAutoWanted) {
+            // It would not start. Leave it be until the next connection.
+            androidAutoBroken = true
         }
-        begin(car, out, viaAlternative = false)
+        begin(car, out, androidAuto = false)
     }
 
     /** Lock held. Creates and starts one kind of picture; false if it would not. */
-    private fun begin(car: MySpinServer.Client, out: FrameSink, viaAlternative: Boolean): Boolean {
+    private fun begin(car: MySpinServer.Client, out: FrameSink, androidAuto: Boolean): Boolean {
         val gate = Gate(out)
         var mine: Showing? = null
         val report: (PictureStatus) -> Unit = { status ->
@@ -145,15 +114,19 @@ class CarPicture(
             }
         }
         return try {
-            val source = if (viaAlternative) alternative!!.createSource(context, report, host) else phoneScreen(context, report, host)
-            val showing = Showing(source, viaAlternative, gate)
+            val source = if (androidAuto) {
+                this.androidAuto.createSource(context, report)
+            } else {
+                this.androidAuto.waitingSource(context, report)
+            }
+            val showing = Showing(source, androidAuto, gate)
             mine = showing
             current = showing
             BridgeLog.log("the car's picture is now: ${source.name}")
             source.start(car, gate)
             true
         } catch (failure: Exception) {
-            BridgeLog.log("${if (viaAlternative) "the other picture" else "the phone's screen"} could not start: ${failure.javaClass.simpleName}: ${failure.message}")
+            BridgeLog.log("${if (androidAuto) "Android Auto" else "the logo card"} could not start: ${failure.javaClass.simpleName}: ${failure.message}")
             gate.open = false
             current?.let { broken -> runCatching { broken.source.stop() } }
             current = null
@@ -188,22 +161,15 @@ class CarPicture(
     }
 
     /**
-     * The rule for which picture to show. The alternative takes over as soon as it is available.
-     * It gives way only after being plainly unavailable for [fallBackAfterMs] (whatever makes it
-     * available may be stopped and started again in a few seconds, and the owner should not be
-     * asked to share their screen in between), and never while its picture is on the car, which
-     * says more about whether it works than any looking from outside. The owner choosing MIRROR
-     * overrules it until they choose otherwise or it goes away.
+     * The rule for when to show Android Auto. It takes over as soon as it is available. It gives
+     * way to the logo only after being plainly unavailable for [fallBackAfterMs] (its server may
+     * be stopped and started again in a few seconds), and never while its picture is on the car,
+     * which says more about whether it works than any looking from outside.
      */
     internal class Chooser(private val fallBackAfterMs: Long = 15_000L) {
         private var unavailableSince = -1L
-        private var mirrorPicked = false
 
-        fun picked(choice: CarMenu.Choice) {
-            mirrorPicked = choice == CarMenu.Choice.MIRROR
-        }
-
-        fun alternative(
+        fun androidAuto(
             showingIt: Boolean,
             availability: AlternativePicture.Availability,
             nowMs: Long,
@@ -217,15 +183,13 @@ class CarPicture(
             return when (seen) {
                 AlternativePicture.Availability.AVAILABLE -> {
                     unavailableSince = -1L
-                    !mirrorPicked
+                    true
                 }
                 AlternativePicture.Availability.UNKNOWN -> {
                     unavailableSince = -1L
-                    showingIt && !mirrorPicked
+                    showingIt
                 }
                 AlternativePicture.Availability.UNAVAILABLE -> {
-                    // Gone: the next time it appears it takes over again, as it does by default.
-                    mirrorPicked = false
                     if (!showingIt) {
                         unavailableSince = -1L
                         false

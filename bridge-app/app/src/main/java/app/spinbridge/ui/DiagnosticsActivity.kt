@@ -37,9 +37,9 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * Behind "Help and log" on the main screen: what to try when nothing appears on the car, the
- * session log (what the car sent, what was answered, what went wrong) with a way to send it, the
- * self-test against a simulated head unit, and connecting by hand.
+ * Reached by pressing and holding the version line on the main screen: what to try when nothing
+ * appears on the car, the session log (what the car sent, what was answered, what went wrong)
+ * with a way to send it, the self-test against a simulated head unit, and connecting by hand.
  */
 class DiagnosticsActivity : Activity() {
 
@@ -115,7 +115,6 @@ class DiagnosticsActivity : Activity() {
         val help = listOf(
             "Nothing on the car's screen at all: tap InControl Apps on the car, try another cable (it must carry " +
                 "data), then Connect below.",
-            "The car shows the Disco Auto logo: the phone is waiting for you. Its first screen says what for.",
             "No sound: pick Bluetooth as the car's audio source.",
         ) + AndroidAuto.troubleshooting
         root.addView(

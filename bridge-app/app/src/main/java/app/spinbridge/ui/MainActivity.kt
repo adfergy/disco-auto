@@ -3,17 +3,22 @@ package app.spinbridge.ui
 
 import android.Manifest
 import android.app.Activity
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.hardware.usb.UsbAccessory
+import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.provider.Settings
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
@@ -28,44 +33,70 @@ import android.widget.TextView
 import android.widget.Toast
 import app.spinbridge.Brand
 import app.spinbridge.BridgeLog
+import app.spinbridge.BridgeService
 import app.spinbridge.BuildInfo
 import app.spinbridge.LinkStatus
 import app.spinbridge.R
 import app.spinbridge.aa.AndroidAuto
-import app.spinbridge.picture.CastPrompt
-import app.spinbridge.picture.CastService
+import app.spinbridge.aa.HeadUnitServer
 import app.spinbridge.picture.PictureStatus
-import app.spinbridge.picture.ScreenCastSource
 import app.spinbridge.selftest.SelfTestActivity
-import app.spinbridge.touch.CarTouch
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 
 /**
- * The phone's screen: the logo and where things stand. Until a car is connected that is all
- * there is to say. Once one is, it says what the car is being shown and what, if anything, the
- * owner has to do, in the picture source's own words. The log and the self-test are one tap away
- * in [DiagnosticsActivity]. Plain views built in code.
+ * The phone's screen: the logo, where things stand, and the three steps to Android Auto on the
+ * car, each ticked off as it is done. Whether Android Auto's head unit server is running is
+ * looked at once a second while this screen is in front, without touching the server
+ * ([HeadUnitServer.look]). The log and the self-test ([DiagnosticsActivity]) are reached by
+ * pressing and holding the version line, or over adb. Plain views built in code.
  */
 class MainActivity : Activity() {
 
     private val main = Handler(Looper.getMainLooper())
-    private val castPrompt = CastPrompt(this)
     private lateinit var statusDot: View
     private lateinit var statusText: TextView
     private lateinit var detailText: TextView
     private lateinit var actionButton: TextView
-    private lateinit var connectedCards: LinearLayout
+    private lateinit var steps: LinearLayout
+    private lateinit var serverStep: Step
+    private lateinit var carStep: Step
     private var resumed = false
-    private var action: PictureStatus.Action? = null
+    private var onAction: (() -> Unit)? = null
 
-    /** True while Android's own permission questions are up: its screen-sharing one waits its turn. */
-    private var permissionsAsked = false
+    /** What the last look at Android Auto's head unit server found. */
+    @Volatile private var server = HeadUnitServer.State.UNKNOWN
+    private var looker: ScheduledExecutorService? = null
 
     private val statusListener: () -> Unit = { main.post { if (resumed) refresh() } }
+
+    private val permissionReceiver = object : BroadcastReceiver() {
+        @Suppress("DEPRECATION")
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action != ACTION_USB_PERMISSION) return
+            val accessory: UsbAccessory? =
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(UsbManager.EXTRA_ACCESSORY, UsbAccessory::class.java)
+                } else {
+                    intent.getParcelableExtra(UsbManager.EXTRA_ACCESSORY)
+                }
+            val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
+            BridgeLog.log("USB permission ${if (granted) "granted" else "denied"}")
+            if (granted && accessory != null) BridgeService.attach(applicationContext, accessory)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         BridgeLog.attach(applicationContext)
         setContentView(buildContent())
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(permissionReceiver, IntentFilter(ACTION_USB_PERMISSION), Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            registerReceiver(permissionReceiver, IntentFilter(ACTION_USB_PERMISSION))
+        }
         requestMissingPermissions()
         handleExtras(intent)
     }
@@ -80,40 +111,36 @@ class MainActivity : Activity() {
         resumed = true
         LinkStatus.addListener(statusListener)
         refresh()
-        if (!permissionsAsked) castPrompt.onResume()
-    }
-
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        permissionsAsked = false
-        if (resumed) castPrompt.onResume()
-    }
-
-    override fun onDestroy() {
-        castPrompt.onDestroy()
-        super.onDestroy()
+        // Off the main thread: it is a (local, harmless) socket call.
+        looker = Executors.newSingleThreadScheduledExecutor().apply {
+            scheduleWithFixedDelay({
+                val seen = HeadUnitServer.look()
+                if (seen != server) {
+                    server = seen
+                    main.post { if (resumed) refresh() }
+                }
+            }, 0, 1, TimeUnit.SECONDS)
+        }
     }
 
     override fun onPause() {
         resumed = false
-        castPrompt.onPause()
+        looker?.shutdownNow()
+        looker = null
         LinkStatus.removeListener(statusListener)
         super.onPause()
     }
 
-    @Deprecated("The platform's own result callback; this app has no AndroidX.")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        if (!castPrompt.onActivityResult(requestCode, resultCode, data)) {
-            @Suppress("DEPRECATION")
-            super.onActivityResult(requestCode, resultCode, data)
-        }
+    override fun onDestroy() {
+        runCatching { unregisterReceiver(permissionReceiver) }
+        super.onDestroy()
     }
 
     /**
      * For driving the app over adb without tapping at the screen:
      * `am start -n <package>/app.spinbridge.ui.MainActivity --ez selftest true` opens the
      * self-test and `--ez diagnostics true` the help and log screen. In a debuggable build only,
-     * `--es demo waiting` and `--es demo showing` put this screen into the state it has with a
+     * `--es demo waiting|connecting|showing|off` puts this screen into the state it has with a
      * car connected, so its wording can be looked at without one.
      */
     private fun handleExtras(intent: Intent?) {
@@ -121,8 +148,9 @@ class MainActivity : Activity() {
         val debuggable = applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
         if (debuggable && LinkStatus.car == null) {
             when (intent.getStringExtra(EXTRA_DEMO)) {
-                "waiting" -> LinkStatus.show(ScreenCastSource.WAITING)
-                "showing" -> LinkStatus.show(ScreenCastSource.SHOWING)
+                "waiting" -> LinkStatus.show(AndroidAuto.WAITING)
+                "connecting" -> LinkStatus.show(AndroidAuto.CONNECTING)
+                "showing" -> LinkStatus.show(AndroidAuto.ON_SCREEN)
                 "off" -> LinkStatus.set(LinkStatus.State.NOT_CONNECTED)
             }
         }
@@ -144,18 +172,25 @@ class MainActivity : Activity() {
         val colour: Int
         val headline: String
         val detail: String
-        var offered: PictureStatus.Action? = null
+        var action: Pair<String, () -> Unit>? = null
         when {
             state == LinkStatus.State.CONNECTED && picture != null -> {
                 colour = if (picture.showing) GOOD else AMBER
                 headline = picture.headline
                 detail = picture.detail
-                offered = picture.action
+                action = picture.action?.let { it.label to { open(it) } }
+            }
+            state == LinkStatus.State.NOT_CONNECTED && carIsOffering() -> {
+                // Plugged in, but Android's "open with" question was dismissed or never came.
+                colour = AMBER
+                headline = "Plugged in, not connected yet"
+                detail = "Tap Connect, then allow Disco Auto to use the car's USB connection."
+                action = "Connect" to ::connect
             }
             state == LinkStatus.State.NOT_CONNECTED -> {
                 colour = GREY
                 headline = "Not connected to a car"
-                detail = "Plug the phone into the car's InControl Apps USB socket."
+                detail = "Follow the steps below."
             }
             else -> {
                 colour = AMBER
@@ -167,98 +202,79 @@ class MainActivity : Activity() {
         statusText.text = headline
         detailText.text = detail
         detailText.visibility = if (detail.isEmpty()) View.GONE else View.VISIBLE
-        action = offered
-        actionButton.text = offered?.label ?: ""
-        actionButton.visibility = if (offered == null) View.GONE else View.VISIBLE
+        onAction = action?.second
+        actionButton.text = action?.first ?: ""
+        actionButton.visibility = if (action == null) View.GONE else View.VISIBLE
 
-        // What to do in the car only means something once there is a car.
-        val connected = state == LinkStatus.State.CONNECTED && picture != null
-        val phoneScreenIsThePicture = offered?.kind == PictureStatus.Action.Kind.ALLOW_CAST ||
-            offered?.kind == PictureStatus.Action.Kind.STOP_CAST
-        // Rebuilt each time: what Android Auto has to say changes with its state.
-        connectedCards.removeAllViews()
-        if (connected) buildConnectedCards(phoneScreenIsThePicture)
-        connectedCards.visibility = if (connected) View.VISIBLE else View.GONE
+        // With Android Auto on the car there is nothing left to do.
+        steps.visibility = if (picture?.showing == true) View.GONE else View.VISIBLE
+        val serverRunning = server == HeadUnitServer.State.LISTENING
+        serverStep.done(serverRunning)
+        serverStep.body.text = if (serverRunning) SERVER_RUNNING else SERVER_STEPS
+        serverStep.extra.visibility = if (serverRunning) View.GONE else View.VISIBLE
+        carStep.done(state != LinkStatus.State.NOT_CONNECTED)
     }
 
-    private fun buildConnectedCards(phoneScreenIsThePicture: Boolean) {
-        if (phoneScreenIsThePicture) connectedCards.addView(touchCard(), cardParams(top = 12))
-        // Android Auto, offered while the phone's own screen is the one in use.
-        val invitation = if (phoneScreenIsThePicture) AndroidAuto.invitation() else null
-        if (invitation != null) {
-            connectedCards.addView(
-                titled(invitation.title, invitation.body).apply {
-                    invitation.action?.let { offered ->
-                        addView(pill(offered.label) { perform(offered) }, spaced(top = 12))
-                    }
-                },
-                cardParams(top = 12)
-            )
+    private fun carIsOffering(): Boolean =
+        runCatching { getSystemService(UsbManager::class.java).accessoryList?.isNotEmpty() == true }.getOrDefault(false)
+
+    private fun open(action: PictureStatus.Action) {
+        for (intent in action.intents) {
+            try {
+                startActivity(intent)
+                return
+            } catch (_: Exception) {
+            }
         }
-        connectedCards.addView(
-            titled(
-                "If the car's screen shows nothing",
-                "Tap InControl Apps on the car's screen. To have it open by itself every time you plug in, " +
-                    "switch on Auto Load InControl Apps in the car's settings."
-            ),
-            cardParams(top = 12)
-        )
-        connectedCards.addView(
-            titled(
-                "Sound",
-                "Sound plays through the car over Bluetooth: pair the phone with the car and choose Bluetooth as " +
-                    "the car's audio source. The steering wheel's track buttons work the same way."
-            ),
-            cardParams(top = 12)
-        )
+        Toast.makeText(this, "That could not be opened on this phone.", Toast.LENGTH_LONG).show()
     }
 
-    /**
-     * Whether touches on the car's screen work the phone while it is mirrored, and how to make
-     * them. Android allows that only through an accessibility service the owner switches on, and
-     * expects to be told plainly what it is for before they do.
-     */
-    private fun touchCard(): LinearLayout =
-        if (CarTouch.available) {
-            titled(
-                "Touch from the car's screen: on",
-                "While your phone's screen is on the car, touching the car's screen works the phone in the same " +
-                    "place. One finger at a time. Use it only when it is safe to."
-            )
+    /** For when the phone is already plugged in and Android's "open with" question was dismissed. */
+    private fun connect() {
+        val usb = getSystemService(UsbManager::class.java)
+        val accessory = usb.accessoryList?.firstOrNull()
+        if (accessory == null) {
+            Toast.makeText(this, "The car is not offering a connection on this cable", Toast.LENGTH_LONG).show()
+            return
+        }
+        BridgeLog.log("Connect: found " + BridgeService.describe(accessory))
+        if (usb.hasPermission(accessory)) {
+            BridgeService.attach(applicationContext, accessory)
         } else {
-            titled(
-                "Touch from the car's screen: off",
-                "To work the phone from the car's screen while mirroring, switch on Disco Auto touch in Android's " +
-                    "Accessibility settings (under Installed apps or Downloaded apps).\n\n" +
-                    "Disco Auto uses that permission only to pass your touches on the car's screen to the phone. " +
-                    "It reads nothing from your screen.\n\n" +
-                    "If Android says the setting is restricted: open Disco Auto's App info, tap the three dots, " +
-                    "choose Allow restricted settings, and try again."
-            ).apply {
-                addView(pill("Open Accessibility settings") {
-                    try {
-                        startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                    } catch (_: Exception) {
-                        Toast.makeText(this@MainActivity, "That could not be opened on this phone.", Toast.LENGTH_LONG).show()
-                    }
-                }, spaced(top = 12))
-            }
+            val reply = PendingIntent.getBroadcast(
+                this, 0, Intent(ACTION_USB_PERMISSION).setPackage(packageName),
+                PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+            usb.requestPermission(accessory, reply)
+        }
+    }
+
+    /** One numbered step, whose number turns into a tick once it is done. */
+    private inner class Step(number: Int, title: String, body: String) {
+        private val badge = text(number.toString(), 15f, Brand.GROUND, bold = true).apply {
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Brand.INK) }
+        }
+        private val label = number.toString()
+        val body: TextView = text(body, 15f, BODY)
+
+        /** Anything under the body that only matters while the step is not done. */
+        val extra = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
+
+        val view = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(badge, LinearLayout.LayoutParams(dp(28), dp(28)).apply { rightMargin = dp(12) })
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(text(title, 16f, HEADING, bold = true))
+                addView(this@Step.body, spaced(top = 4))
+                addView(extra, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+            }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
         }
 
-    private fun perform(offered: PictureStatus.Action) {
-        when (offered.kind) {
-            PictureStatus.Action.Kind.ALLOW_CAST -> castPrompt.ask()
-            PictureStatus.Action.Kind.STOP_CAST -> CastService.stop(this)
-            PictureStatus.Action.Kind.OPEN -> {
-                for (intent in offered.intents) {
-                    try {
-                        startActivity(intent)
-                        return
-                    } catch (_: Exception) {
-                    }
-                }
-                Toast.makeText(this, "That could not be opened on this phone.", Toast.LENGTH_LONG).show()
-            }
+        fun done(yes: Boolean) {
+            badge.text = if (yes) "✓" else label
+            (badge.background as GradientDrawable).setColor(if (yes) GOOD else Brand.INK)
         }
     }
 
@@ -284,7 +300,7 @@ class MainActivity : Activity() {
         }
         statusText = text("", 17f, HEADING, bold = true)
         detailText = text("", 15f, BODY)
-        actionButton = pill("") { action?.let(::perform) }
+        actionButton = pill("") { onAction?.invoke() }
         val status = card().apply {
             addView(LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -296,24 +312,43 @@ class MainActivity : Activity() {
             addView(actionButton, spaced(top = 14))
         }
 
-        connectedCards = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        serverStep = Step(1, "Start Android Auto's head unit server", SERVER_STEPS).apply {
+            extra.addView(pill(AndroidAuto.OPEN_SETTINGS.label) { open(AndroidAuto.OPEN_SETTINGS) }, spaced(top = 12))
+            extra.addView(text(NO_THREE_DOTS, 14f, DIM), spaced(top = 10))
+        }
+        carStep = Step(
+            2, "Plug the phone into the car",
+            "Use the car's InControl Apps USB socket. If the car's screen does not change, tap InControl Apps on it. " +
+                "Android Auto then appears by itself."
+        )
+        val soundStep = Step(
+            3, "Sound",
+            "Pair the phone with the car over Bluetooth and choose Bluetooth as the car's audio source. " +
+                "The steering wheel's track buttons then work too."
+        )
+        steps = card().apply {
+            addView(text("Getting Android Auto on the car", 17f, HEADING, bold = true))
+            addView(serverStep.view, spaced(top = 16))
+            addView(carStep.view, spaced(top = 18))
+            addView(soundStep.view, spaced(top = 18))
+        }
 
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             addView(header, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
             addView(status, cardParams(top = 14))
-            addView(connectedCards, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+            addView(steps, cardParams(top = 12))
             addView(
-                text("Help and log", 15f, HEADING, bold = true).apply {
+                text("Disco Auto ${BuildInfo.VERSION}", 12f, DIM).apply {
                     gravity = Gravity.CENTER
-                    setPadding(dp(16), dp(14), dp(16), dp(6))
-                    setOnClickListener { startActivity(Intent(this@MainActivity, DiagnosticsActivity::class.java)) }
+                    setPadding(0, dp(16), 0, dp(18))
+                    // Out of the way on purpose: the log and the self-test are for chasing problems.
+                    setOnLongClickListener {
+                        startActivity(Intent(this@MainActivity, DiagnosticsActivity::class.java))
+                        true
+                    }
                 },
-                LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(8) }
-            )
-            addView(
-                text("Disco Auto ${BuildInfo.VERSION}", 12f, DIM).apply { gravity = Gravity.CENTER },
-                LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { bottomMargin = dp(18) }
+                LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)
             )
         }
 
@@ -329,11 +364,6 @@ class MainActivity : Activity() {
                 insets
             }
         }
-    }
-
-    private fun titled(title: String, body: String): LinearLayout = card().apply {
-        addView(text(title, 17f, HEADING, bold = true))
-        addView(text(body, 15f, BODY), spaced(top = 8))
     }
 
     private fun card(): LinearLayout = LinearLayout(this).apply {
@@ -381,16 +411,22 @@ class MainActivity : Activity() {
             add(Manifest.permission.BLUETOOTH_CONNECT)
             addAll(AndroidAuto.permissions)
         }.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
-        if (wanted.isNotEmpty()) {
-            permissionsAsked = true
-            requestPermissions(wanted.toTypedArray(), 1)
-        }
+        if (wanted.isNotEmpty()) requestPermissions(wanted.toTypedArray(), 1)
     }
 
     companion object {
         const val EXTRA_SELF_TEST = "selftest"
         const val EXTRA_DIAGNOSTICS = "diagnostics"
         const val EXTRA_DEMO = "demo"
+        private const val ACTION_USB_PERMISSION = "app.spinbridge.action.USB_PERMISSION_MAIN"
+
+        private const val SERVER_STEPS =
+            "Tap the button below. In Android Auto's settings, tap the three dots at the top right and choose " +
+                "Start head unit server. Do this again whenever the phone has been restarted."
+        private const val SERVER_RUNNING = "Running. It stays running until the phone restarts."
+        private const val NO_THREE_DOTS =
+            "No three dots? Scroll to the bottom of Android Auto's settings, tap Version ten times and tap OK. " +
+                "You only need to do this once."
 
         val BACKGROUND = Color.rgb(0x0C, 0x12, 0x0E)
         val CARD = Color.rgb(0x17, 0x20, 0x1A)

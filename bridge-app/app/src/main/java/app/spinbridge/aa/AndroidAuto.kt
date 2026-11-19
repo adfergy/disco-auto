@@ -10,12 +10,12 @@ import android.net.Uri
 import android.provider.Settings
 import app.spinbridge.FrameSource
 import app.spinbridge.picture.AlternativePicture
-import app.spinbridge.picture.PictureHost
 import app.spinbridge.picture.PictureStatus
+import app.spinbridge.picture.WaitingSource
 
 /**
- * Android Auto as the picture that takes over from the phone's screen whenever its head unit
- * server is running. All of the app's Android Auto wording is here.
+ * Android Auto as the car's picture, shown whenever its head unit server is running. All of the
+ * app's Android Auto wording is here.
  */
 object AndroidAuto : AlternativePicture {
     private const val PACKAGE = "com.google.android.projection.gearhead"
@@ -27,8 +27,8 @@ object AndroidAuto : AlternativePicture {
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
     )
 
-    private fun openSettings() =
-        PictureStatus.Action("Open Android Auto settings", PictureStatus.Action.Kind.OPEN, settings())
+    /** The button that opens Android Auto's settings. */
+    val OPEN_SETTINGS = PictureStatus.Action("Open Android Auto settings", settings())
 
     override fun availability(): AlternativePicture.Availability = when (HeadUnitServer.look()) {
         HeadUnitServer.State.LISTENING -> AlternativePicture.Availability.AVAILABLE
@@ -36,44 +36,22 @@ object AndroidAuto : AlternativePicture {
         HeadUnitServer.State.UNKNOWN -> AlternativePicture.Availability.UNKNOWN
     }
 
-    override fun createSource(context: Context, onStatus: (PictureStatus) -> Unit, host: PictureHost): FrameSource =
-        AndroidAutoSource(context, onStatus, host)
+    override fun createSource(context: Context, onStatus: (PictureStatus) -> Unit): FrameSource =
+        AndroidAutoSource(context, onStatus)
 
-    override val menuLabel = "ANDROID AUTO"
-    override val menuHint = "See phone app for pairing instructions"
+    override fun waitingSource(context: Context, onStatus: (PictureStatus) -> Unit): FrameSource =
+        WaitingSource(context, onStatus, WAITING, CAR_FOLLOW_PHONE)
 
-    /** Under the car's menu while Android Auto is the picture on its way. */
-    fun carHint(status: PictureStatus): String =
-        if (status == CONNECTING) "Connecting to Android Auto..." else "See phone app for pairing instructions"
+    /** On the car's screen, under the logo, whenever the owner has something to do on the phone. */
+    const val CAR_FOLLOW_PHONE = "Follow the instructions on your phone to get Android Auto running"
 
-    /**
-     * With the server stopped: how to set Android Auto up, developer mode included. With it
-     * running (the owner chose MIRROR for now): that it is ready.
-     */
-    override fun invitation(): AlternativePicture.Invitation =
-        if (HeadUnitServer.look() == HeadUnitServer.State.LISTENING) READY else PAIRING
+    /** Under the logo on the car's screen while Android Auto is on its way. */
+    fun carMessage(status: PictureStatus): String =
+        if (status == CONNECTING) "Connecting to Android Auto\u2026" else CAR_FOLLOW_PHONE
 
-    private val PAIRING = AlternativePicture.Invitation(
-        title = "Android Auto: pairing instructions",
-        body = "To have Android Auto on the car's screen instead of your phone's screen:\n\n" +
-            "1. Tap the button below to open Android Auto's settings.\n\n" +
-            "2. First time only, switch on developer mode: scroll to the bottom, tap Version ten times " +
-            "and accept. Three dots appear at the top right.\n\n" +
-            "3. Tap the three dots and choose Start head unit server.\n\n" +
-            "Android Auto takes over the car's screen a few seconds later. The server keeps running until " +
-            "the phone restarts, so step 3 is once per restart and step 2 is once only.",
-        action = openSettings(),
-    )
-
-    private val READY = AlternativePicture.Invitation(
-        title = "Android Auto is ready",
-        body = "Its head unit server is running. Tap ANDROID AUTO on the car's screen to switch to it.",
-        action = null,
-    )
-
-    override val troubleshooting = listOf(
-        "Android Auto is expected and the phone's screen appears instead: Android Auto's head unit server is not " +
-            "running. Start it from Android Auto's settings, three-dot menu.",
+    val troubleshooting = listOf(
+        "The car shows the Disco Auto logo: Android Auto's head unit server is not running. Start it from " +
+            "Android Auto's settings, three-dot menu.",
         "The phone says Android Auto's server is not answering: in the same menu choose Stop head unit server, " +
             "then Start head unit server.",
     )
@@ -89,50 +67,58 @@ object AndroidAuto : AlternativePicture {
             0
         }
 
+    /** Connected to the car, and Android Auto's head unit server is not running. */
+    val WAITING = PictureStatus(
+        showing = false,
+        headline = "Connected to the car. Now start Android Auto",
+        detail = "Android Auto's head unit server is not running. Start it as shown below and Android Auto " +
+            "appears on the car's screen by itself.",
+        notification = "Connected to the car. Start Android Auto's head unit server.",
+    )
+
     val CONNECTING = PictureStatus(
         showing = false,
-        headline = "Connected to the car, waiting for Android Auto",
+        headline = "Connecting to Android Auto",
         detail = "Android Auto should be on the car's screen in a moment.",
         notification = "Connected to the car. Waiting for Android Auto.",
     )
 
     val NO_PICTURE = PictureStatus(
         showing = false,
-        headline = "Connected to the car, waiting for Android Auto",
+        headline = "Waiting for Android Auto",
         detail = "Android Auto is connected but has not sent a picture yet. Unlock the phone: Android Auto may be " +
-            "asking something.",
+            "asking you something.",
         notification = "Android Auto is connected but has sent no picture. Unlock the phone.",
     )
 
     val SERVER_GONE = PictureStatus(
         showing = false,
         headline = "Android Auto's server has stopped",
-        detail = "If it stays stopped, the menu comes back on the car's screen after about fifteen seconds.",
+        detail = "Start it again from Android Auto's settings: three dots, Start head unit server.",
         notification = "Android Auto's head unit server has stopped.",
+        action = OPEN_SETTINGS,
     )
 
     val NOT_ANSWERING = PictureStatus(
         showing = false,
         headline = "Android Auto's server is not answering",
-        detail = "Its head unit server is running but takes no connections. Open Android Auto's settings, tap the " +
-            "three dots, choose Stop head unit server, then the three dots again and Start head unit server.",
+        detail = "Open Android Auto's settings, tap the three dots and choose Stop head unit server. Then tap the " +
+            "three dots again and choose Start head unit server.",
         notification = "Android Auto's head unit server is not answering. Tap for what to do.",
-        action = openSettings(),
+        action = OPEN_SETTINGS,
     )
 
     val ON_SCREEN = PictureStatus(
         showing = true,
         headline = "Android Auto is on the car's screen",
-        detail = "To mirror the phone's own screen instead, stop Android Auto's head unit server from its settings, " +
-            "three-dot menu. The car's menu comes back about fifteen seconds later.",
+        detail = "Use it from the car's screen. You can put the phone away.",
         notification = "Android Auto is on the car's screen.",
-        action = openSettings(),
     )
 
     fun trouble(what: String) = PictureStatus(
         showing = false,
         headline = "Android Auto cannot be shown",
-        detail = "Android Auto connected, but $what. The log under Help and log has the details.",
+        detail = "Android Auto connected, but $what.",
         notification = "Android Auto connected but cannot be shown. Tap for details.",
     )
 }

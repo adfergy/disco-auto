@@ -13,8 +13,8 @@ android {
         // 31 = Android 12.
         minSdk = 31
         targetSdk = 36
-        versionCode = 5
-        versionName = "0.5.0"
+        versionCode = 6
+        versionName = "0.6.0"
     }
 
     // Release signing. The key and its passwords live outside the repository: keystore.properties
@@ -38,6 +38,11 @@ android {
             isMinifyEnabled = false
             signingConfig = signingConfigs.findByName("release")
         }
+    }
+
+    // BuildConfig.VERSION_NAME is what the app shows as its version, so it always matches the above.
+    buildFeatures {
+        buildConfig = true
     }
 
     compileOptions {

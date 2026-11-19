@@ -77,6 +77,7 @@ object BridgeLog {
     fun removeListener(listener: () -> Unit) { listeners -= listener }
 }
 
+/** The app's version, taken from versionName in app/build.gradle.kts. */
 object BuildInfo {
-    const val VERSION = "0.4.0"
+    const val VERSION = BuildConfig.VERSION_NAME
 }

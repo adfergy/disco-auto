@@ -26,8 +26,6 @@ import app.spinbridge.BridgeLog
 import app.spinbridge.FrameSource
 import app.spinbridge.LinkStatus
 import app.spinbridge.picture.CarPicture
-import app.spinbridge.picture.CastPrompt
-import app.spinbridge.touch.CarTouch
 import app.spinbridge.myspin.MySpinServer
 import app.spinbridge.myspin.MySpinSession
 import java.nio.ByteBuffer
@@ -45,7 +43,6 @@ import kotlin.concurrent.thread
 class SelfTestActivity : Activity() {
 
     private val main = Handler(Looper.getMainLooper())
-    private val castPrompt = CastPrompt(this, unpromptedLimit = 1)
     private lateinit var picture: ImageView
     private lateinit var caption: TextView
     private lateinit var note: TextView
@@ -106,7 +103,6 @@ class SelfTestActivity : Activity() {
             addView(button("Home key") { key(MySpinServer.SOFTKEY_HOME) }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
             addView(button("Back key") { key(MySpinServer.SOFTKEY_BACK) }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
             addView(button("Leave 6 s") { car?.leaveScreen(6_000) }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
-            addView(button("Share screen") { castPrompt.ask() }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1.2f))
         })
         note = TextView(this).apply { setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f) }
         root.addView(note)
@@ -171,16 +167,6 @@ class SelfTestActivity : Activity() {
         main.post(captionTick)
     }
 
-    override fun onResume() {
-        super.onResume()
-        castPrompt.onResume()
-    }
-
-    override fun onPause() {
-        castPrompt.onPause()
-        super.onPause()
-    }
-
     override fun onStop() {
         if (debugTouchesOn) {
             runCatching { unregisterReceiver(debugTouches) }
@@ -193,22 +179,9 @@ class SelfTestActivity : Activity() {
         super.onStop()
     }
 
-    override fun onDestroy() {
-        castPrompt.onDestroy()
-        super.onDestroy()
-    }
-
-    @Deprecated("The platform's own result callback; this app has no AndroidX.")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        if (!castPrompt.onActivityResult(requestCode, resultCode, data)) {
-            @Suppress("DEPRECATION")
-            super.onActivityResult(requestCode, resultCode, data)
-        }
-    }
-
     /**
      * Runs the simulated car only while no real one is connected. With a real car on the cable
-     * the two would both be asking for the phone's screen, or for whatever else the car is shown.
+     * the two would both be asking for Android Auto.
      */
     private fun followLink() {
         if (LinkStatus.state == LinkStatus.State.NOT_CONNECTED) {
@@ -358,9 +331,6 @@ class SelfTestActivity : Activity() {
     }
 
     private fun forwardTouch(event: MotionEvent): Boolean {
-        // A touch passed on from the "car" can land on this same picture: that is its own echo,
-        // not another touch on the car.
-        if (CarTouch.isEcho(event.rawX, event.rawY, SystemClock.uptimeMillis())) return true
         val active = car ?: return false
         val viewWidth = picture.width.toFloat()
         val viewHeight = picture.height.toFloat()
